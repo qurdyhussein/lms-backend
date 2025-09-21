@@ -1,11 +1,10 @@
 from django.http import JsonResponse
 from django.urls import path
 from core.views import TenantLoginView
-
-def test_view(request):
-    return JsonResponse({"message": "Tenant routing is working"})
+from core.views import institution_info_view  # au jina lako
 
 urlpatterns = [
     path("login/", TenantLoginView.as_view(), name="tenant-login"),
-    path("test/", test_view),  # 👈 test route
-]
+    path("institution-info/", institution_info_view),
+    
+] 

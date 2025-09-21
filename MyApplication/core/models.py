@@ -22,7 +22,12 @@ class User(AbstractUser):
     )
 
     email = models.EmailField(unique=True)
-    registration_number = models.CharField(max_length=50, unique=True)
+    registration_number = models.CharField(
+    max_length=50,
+    unique=True,
+    blank=True,
+    null=True
+)
     role = models.CharField(
         max_length=20,
         choices=ROLE_CHOICES,

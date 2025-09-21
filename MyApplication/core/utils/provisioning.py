@@ -3,24 +3,25 @@ from core.models import User
 
 def provision_default_admin(schema_name, institution_name):
     with schema_context(schema_name):
-        # Tengeneza prefix kutoka jina la institution
         prefix = institution_name.split()[0].upper()  # e.g. MUST
-
-        # Hesabu admin waliopo ili kuunda registration number ya kipekee
         count = User.objects.filter(role='superadmin').count() + 1
         reg_number = f"{prefix}-{str(count).zfill(3)}"  # e.g. MUST-001
 
-        # Check kama admin tayari yupo
-        if not User.objects.filter(registration_number=reg_number).exists():
-            User.objects.create_user(
-                username='admin',
+        # Tengeneza username ya kipekee kwa kila schema
+        username = f"admin_{schema_name}"
+
+        # Check kama admin tayari yupo kwa username
+        if not User.objects.filter(username=username).exists():
+            user = User.objects.create_user(
+                username=username,
                 registration_number=reg_number,
                 email=f"{reg_number.lower()}@{schema_name}.localhost",
-                password='admin',  # default password
+                password='admin',
                 role='superadmin'
             )
             print(f"✅ Admin created: {reg_number} (schema: {schema_name})")
             return reg_number
         else:
-            print(f"⚠️ Admin already exists: {reg_number}")
-            return None
+            existing_user = User.objects.get(username=username)
+            print(f"⚠️ Admin already exists: {existing_user.registration_number}")
+            return existing_user.registration_number
