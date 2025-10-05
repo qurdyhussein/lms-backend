@@ -1,9 +1,8 @@
-# lms_project/models.py
-
 from django.db import models
 from django_tenants.models import TenantMixin, DomainMixin
-from django.conf import settings
 from django.utils import timezone
+from auditlog.registry import auditlog
+
 
 
 class Institution(TenantMixin):
@@ -14,18 +13,18 @@ class Institution(TenantMixin):
     contacts = models.CharField(max_length=100, default="N/A")
     website = models.URLField(blank=True, null=True)
     logo = models.ImageField(upload_to='logos/', blank=True, null=True)
+    registration_number = models.CharField(max_length=20, unique=True, blank=True)
+
     plan = models.CharField(
-    max_length=20,
-    choices=[('free', 'Free'), ('premium', 'Premium')],
-    default='free'
-)
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='institutions'
+        max_length=20,
+        choices=[('free', 'Free'), ('premium', 'Premium')],
+        default='free'
     )
+
+    # ✅ Replaced ForeignKey with safe references
+    owner_email = models.EmailField(blank=True, null=True)
+    owner_registration_number = models.CharField(max_length=20, blank=True, null=True)
+
     paid_until = models.DateField(default=timezone.now)
     is_active = models.BooleanField(default=True)
 
@@ -41,3 +40,13 @@ class Domain(DomainMixin):
         on_delete=models.CASCADE,
         related_name='domains'
     )
+
+auditlog.register(Institution)
+
+
+class SystemNotification(models.Model):
+    title = models.CharField(max_length=100)
+    message = models.TextField()
+    urgency = models.CharField(max_length=10, choices=[("info", "Info"), ("urgent", "Urgent")])
+    sent_at = models.DateTimeField(auto_now_add=True)
+    

@@ -1,8 +1,12 @@
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, PermissionsMixin
 from django.db import models
 from django.core.validators import RegexValidator
+from core.managers import CustomUserManager  # ✅ Custom manager
 
-class User(AbstractUser):
+class User(AbstractUser, PermissionsMixin):
+    groups = None
+    user_permissions = None
+
     ROLE_CHOICES = (
         ('superadmin', 'Super Admin'),
         ('client', 'Client'),
@@ -22,21 +26,31 @@ class User(AbstractUser):
     )
 
     email = models.EmailField(unique=True)
+
     registration_number = models.CharField(
-    max_length=50,
-    unique=True,
-    blank=True,
-    null=True
-)
+        max_length=100,
+        unique=True,
+        null=True,
+        blank=True
+    )
+
+    surname = models.CharField(max_length=100, default="Unknown")
+
     role = models.CharField(
         max_length=20,
         choices=ROLE_CHOICES,
         default='client'
     )
 
-    # Django authentication settings
     USERNAME_FIELD = 'registration_number'
     REQUIRED_FIELDS = ['email', 'username']
 
+    objects = CustomUserManager()  # ✅ Enables email-based login
+
     def __str__(self):
         return f"{self.username} ({self.role})"
+
+    def save(self, *args, **kwargs):
+        if self.registration_number:
+            self.registration_number = self.registration_number.upper()
+        super().save(*args, **kwargs)
