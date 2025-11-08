@@ -1,6 +1,10 @@
 import os
 from pathlib import Path
 from datetime import timedelta
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -136,3 +140,7 @@ CORS_ALLOW_ALL_ORIGINS = True
 
 # 🧠 Default Primary Key
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+ZENOPAY_API_KEY = os.getenv("ZENOPAY_API_KEY")

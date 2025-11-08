@@ -2,6 +2,10 @@
 from django.urls import path
 from .views import (
     AuditLogView,
+    ChangePasswordView,
+    GetInstitutionCredentialsView,
+    InitiatePaymentView,
+    ProfileView,
     SuperAdminInstitutionListView,
     SuperAdminStatsView,
     SuperAdminAnalyticsView,
@@ -12,6 +16,10 @@ from .views import (
     TenantListView,
     SystemSettingsView,
     JWTPreviewView,
+    ClientNotificationView, 
+    MarkNotificationReadView,
+    ToggleInstitutionStatusView,
+    zenopay_webhook,
 )
 
 urlpatterns = [
@@ -26,6 +34,15 @@ urlpatterns = [
     path("tenants/", TenantListView.as_view()),
     path("settings/", SystemSettingsView.as_view()),
     path("jwt-preview/", JWTPreviewView.as_view()),
+    path("notifications/", ClientNotificationView.as_view(), name="client-notifications"),
+    path("notifications/<int:pk>/read/", MarkNotificationReadView.as_view(), name="mark-notification-read"),
+    path("profile/", ProfileView.as_view(), name="tenant-profile"),
+    path("change-password/", ChangePasswordView.as_view(), name="change-password"),
+    path("institution/<str:schema_name>/toggle/", ToggleInstitutionStatusView.as_view()),
+    path("payments/institution/<str:schema_name>/initiate-payment/", InitiatePaymentView.as_view()),
+    path("zenopay/webhook/", zenopay_webhook),
+    path("order/institution/<str:schema_name>/credentials/", GetInstitutionCredentialsView.as_view(), name="get-institution-credentials"),
+
 
 ]
 

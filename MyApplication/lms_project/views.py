@@ -1,4 +1,6 @@
-from datetime import timedelta
+from datetime import timedelta, timezone
+import json
+from django.http import JsonResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -21,10 +23,20 @@ from django.db.models.functions import TruncMonth
 from django.db.models import Count
 from collections import OrderedDict
 from auditlog.models import LogEntry
-from .models import SystemNotification
+from .models import NotificationReadStatus, SystemNotification
 import jwt
 from datetime import datetime
+from rest_framework.permissions import IsAdminUser
+from django.utils import timezone
+from lms_project.services.payments import initiate_zenopay_payment
+from django.views.decorators.csrf import csrf_exempt
+import requests
+from dotenv import load_dotenv
 
+load_dotenv()
+
+
+ZENOPAY_API_KEY = os.getenv("ZENOPAY_API_KEY")
 
 
 from .serializers import (
@@ -41,30 +53,61 @@ from .serializers import (
 )
 
 
-
-
 class RegisterInstitutionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         serializer = InstitutionRegisterSerializer(data=request.data)
         if serializer.is_valid():
-            client_user = request.user  # ✅ Usifetch tena kutoka public
+            client_user = request.user
+            plan = serializer.validated_data.get("plan")
 
-            with schema_context("public"):  # ✅ Force provisioning to public
+            with schema_context("public"):
+                # ✅ Provision tenant
                 institution, login_user = provision_tenant(serializer.validated_data, client_user)
 
-            return Response({
+                # ✅ Apply subscription logic
+                if plan == "free":
+                    institution.is_active = True
+                    institution.paid_until = timezone.now().date() + timedelta(days=14)
+                else:  # premium
+                    institution.is_active = False
+                    institution.paid_until = None
+
+                institution.save()
+
+            # ✅ Response based on plan
+            response_data = {
                 "message": f"Institution '{institution.name}' registered successfully.",
-                "subdomain": request.data['domain'],
-                "admin_login": {
+                "subdomain": request.data["domain"]
+            }
+
+            if plan == "free":
+                response_data["admin_login"] = {
                     "reg_number": institution.registration_number,
                     "default_password": "admin"
                 }
-            }, status=status.HTTP_201_CREATED)
+            else:
+                # ✅ For premium, initiate payment and return order_id only
+                buyer_phone = request.data.get("buyer_phone", "0700000000")
+                payment_response = initiate_zenopay_payment(institution, buyer_phone)
+
+                if payment_response.get("status_code") == 200:
+                    with schema_context("public"):
+                        institution.payment_order_id = payment_response.get("order_id")
+                        institution.save()
+
+                    response_data["order_id"] = payment_response.get("order_id")
+                    response_data["payment_message"] = payment_response.get("message")
+                else:
+                    return Response({
+                        "error": "Failed to initiate payment",
+                        "details": payment_response
+                    }, status=500)
+
+            return Response(response_data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
         
 class ClientInstitutionListView(APIView):
     permission_classes = [IsAuthenticated]
@@ -430,3 +473,206 @@ class JWTPreviewView(APIView):
 
         token = jwt.encode(payload, "your-secret-key", algorithm="HS256")
         return Response({"token": token})
+    
+class ClientNotificationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        notifications = SystemNotification.objects.all().order_by("-sent_at")
+        serialized = []
+        for n in notifications:
+            is_read = NotificationReadStatus.objects.filter(
+                notification=n,
+                user_email=request.user.email
+            ).exists()
+            serialized.append({
+                "id": n.id,
+                "title": n.title,
+                "message": n.message,
+                "created_at": n.sent_at,
+                "read": is_read,
+            })
+        return Response(serialized)
+
+
+from django.contrib.auth import get_user_model
+User = get_user_model()
+
+class MarkNotificationReadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        try:
+            notification = SystemNotification.objects.get(pk=pk)
+            NotificationReadStatus.objects.get_or_create(
+                notification=notification,
+                user_email=request.user.email
+            )
+            return Response({"detail": "Marked as read"})
+        except SystemNotification.DoesNotExist:
+            return Response({"detail": "Notification not found"}, status=404)
+        
+
+
+class ProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        return Response({
+            "username": user.username,
+            "email": user.email,
+        })
+
+
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        new_password = request.data.get("new_password")
+        if not new_password:
+            return Response({"error": "New password required"}, status=400)
+
+        user.set_password(new_password)
+        user.save()
+        return Response({"detail": "Password updated successfully"})
+    
+
+
+class ToggleInstitutionStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, schema_name):
+        if request.user.role != "superadmin":
+            return Response({"error": "Forbidden"}, status=403)
+
+        action = request.data.get("action")
+        if action not in ["activate", "deactivate"]:
+            return Response({"error": "Invalid action"}, status=400)
+
+        with schema_context("public"):  # ✅ Force update inside public schema
+            try:
+                institution = Institution.objects.get(schema_name=schema_name)
+
+                if action == "activate":
+                    institution.is_active = True
+                    institution.paid_until = timezone.now().date() + timedelta(days=30)
+                else:
+                    institution.is_active = False
+
+                institution.save()
+                return Response({"detail": f"Institution '{institution.name}' updated"}, status=200)
+
+            except Institution.DoesNotExist:
+                return Response({"error": "Institution not found"}, status=404)
+
+
+
+class InitiatePaymentView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, schema_name):
+        with schema_context("public"):
+            try:
+                institution = Institution.objects.get(schema_name=schema_name)
+
+                if institution.plan != "premium":
+                    return Response({"error": "Only premium institutions require payment"}, status=400)
+
+                buyer_phone = request.data.get("buyer_phone", "0700000000")  # ✅ fallback if missing
+
+                payment_response = initiate_zenopay_payment(institution, buyer_phone)
+
+                # ✅ Check if Zenopay responded successfully
+                if payment_response.get("status_code") == 200:
+                    return Response({
+                        "message": payment_response.get("message"),
+                        "order_id": payment_response.get("order_id")
+                    }, status=200)
+                else:
+                    return Response({
+                        "error": "Failed to initiate payment",
+                        "details": payment_response
+                    }, status=500)
+
+            except Institution.DoesNotExist:
+                return Response({"error": "Institution not found"}, status=404)
+            
+
+@csrf_exempt
+def zenopay_webhook(request):
+    if request.headers.get("x-api-key") != settings.ZENOPAY_API_KEY:
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+
+    try:
+        payload = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    schema = payload.get("metadata", {}).get("schema_name")
+    status = payload.get("payment_status")
+
+    if not schema or not status:
+        return JsonResponse({"error": "Invalid payload"}, status=400)
+
+    with schema_context("public"):
+        try:
+            institution = Institution.objects.get(schema_name=schema)
+
+            if status.upper() == "COMPLETED":
+                institution.is_active = True
+                institution.paid_until = timezone.now().date() + timedelta(days=30)
+            else:
+                institution.is_active = False
+
+            institution.save()
+
+        except Institution.DoesNotExist:
+            return JsonResponse({"error": "Institution not found"}, status=404)
+
+    return JsonResponse({"detail": "Webhook processed"})
+
+
+class GetInstitutionCredentialsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, schema_name):
+        with schema_context("public"):
+            try:
+                institution = Institution.objects.get(schema_name=schema_name)
+
+                if institution.plan != "premium":
+                    return Response({"error": "Only premium institutions require payment verification"}, status=400)
+
+                if not institution.payment_order_id:
+                    return Response({"error": "No payment order found for this institution"}, status=404)
+
+                # ✅ Check payment status from Zenopay
+                zenopay_url = f"https://zenoapi.com/api/payments/order-status?order_id={institution.payment_order_id}"
+                headers = {"x-api-key": ZENOPAY_API_KEY}
+                res = requests.get(zenopay_url, headers=headers)
+
+                if res.status_code != 200:
+                    return Response({"error": "Failed to contact Zenopay"}, status=502)
+
+                data = res.json()
+                payment_status = data.get("payment_status")
+
+                if payment_status == "COMPLETED":
+                    institution.is_active = True
+                    institution.paid_until = timezone.now().date() + timezone.timedelta(days=365)
+                    institution.save()
+
+                    return Response({
+                        "reg_number": institution.registration_number,
+                        "default_password": "admin"
+                    }, status=200)
+
+                return Response({
+                    "message": "Payment not completed yet",
+                    "status": payment_status
+                }, status=202)
+
+            except Institution.DoesNotExist:
+                return Response({"error": "Institution not found"}, status=404)

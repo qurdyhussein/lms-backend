@@ -25,5 +25,7 @@ urlpatterns = [
     path('public/', include("lms_project.public_urls")),
     path('tenant/', include("lms_project.tenant_urls")),
     path("api/superadmin/", include("lms_project.public_urls")),
+    path("api/client/", include("lms_project.public_urls")),
+    path("api/public/", include("lms_project.public_urls")),
 
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
