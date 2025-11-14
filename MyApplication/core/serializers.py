@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
-from core.models import User, CourseCategory
+from core.models import Enrollment, User, CourseCategory
+from core.models import Course, Module
+
 
 
 class CreateUserSerializer(serializers.ModelSerializer):
@@ -55,3 +57,76 @@ class CourseCategorySerializer(serializers.ModelSerializer):
         model = CourseCategory
         fields = ['id', 'name', 'description', 'created_at']
         read_only_fields = ['id', 'created_at']
+
+
+
+class ModuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Module
+        fields = ["id","title", "content"]
+
+class CourseCreateSerializer(serializers.ModelSerializer):
+    modules = ModuleSerializer(many=True)
+
+    class Meta:
+        model = Course
+        fields = ["title", "description", "category", "visibility", "modules"]
+
+    def create(self, validated_data):
+        modules_data = validated_data.pop("modules")
+        course = Course.objects.create(**validated_data)
+        for mod in modules_data:
+            Module.objects.create(course=course, **mod)
+        return course
+
+
+
+class CourseWithModulesSerializer(serializers.ModelSerializer):
+    modules = ModuleSerializer(many=True, read_only=True)
+    category = CourseCategorySerializer(read_only=True)  
+    enrolled_students = serializers.IntegerField(read_only=True)
+
+
+    class Meta:
+        model = Course
+        fields = ["id", "title", "description", "category", "visibility", "status",  "created_at", "modules", "enrolled_students"
+]
+
+
+
+class ModuleUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Module
+        fields = ["id", "title", "content"]
+
+class CourseUpdateSerializer(serializers.ModelSerializer):
+    modules = ModuleUpdateSerializer(many=True)
+
+    class Meta:
+        model = Course
+        fields = ["title", "description", "category", "visibility", "modules"]
+
+    def update(self, instance, validated_data):
+        modules_data = validated_data.pop("modules", [])
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        # Clear old modules and recreate
+        instance.modules.all().delete()
+        for mod in modules_data:
+            Module.objects.create(course=instance, **mod)
+
+        return instance
+    
+class StudentInfoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "firstname", "middlename", "surname", "registration_number"]
+
+class EnrollmentSerializer(serializers.ModelSerializer):
+    student = StudentInfoSerializer(read_only=True)
+
+    class Meta:
+        model = Enrollment
+        fields = ["id", "student", "enrolled_at"]
